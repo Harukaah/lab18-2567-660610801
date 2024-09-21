@@ -1,136 +1,117 @@
-import { DB } from "@lib/DB";
+import { 
+  zEnrollmentGetParam, 
+  zEnrollmentPostBody, 
+  zEnrollmentDeleteBody 
+} from "@lib/schema";
+import { DB, Student } from "@lib/DB";
 import { NextRequest, NextResponse } from "next/server";
-import jwt from "jsonwebtoken";
-import { headers } from "next/headers";
-import { Payload } from "@lib/DB";
 
-export const GET = async (request: NextRequest) => {
-  const rawAuthHeader = headers().get("authorization");
+export const GET = async (request:NextRequest) => {
+  const studentId = request.nextUrl.searchParams.get("studentId");
+  const courseNo = request.nextUrl.searchParams.get("courseNo");
 
-  if (!rawAuthHeader || !rawAuthHeader.startsWith("Bearer ")) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: "Authorization header is required",
-      },
-      { status: 401 }
-    );
-  }
-
-  const token = rawAuthHeader.split(" ")[1];
-
-  const secret = process.env.JWT_SECRET || "This is my special secret";
-  let studentId = null;
-
-  //preparing "role" variable for reading role information from token
-  let role = null;
-
-  try {
-    const payload = jwt.verify(token, secret);
-    studentId = (<Payload>payload).studentId;
-
-    //read role information from "payload" here (just one line code!)
-    //role = ...
-  } catch {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: "Invalid token",
-      },
-      { status: 401 }
-    );
-  }
-
-  //Check role here. If user is "ADMIN" show all of the enrollments instead
-  //   return NextResponse.json({
-  //     ok: true,
-  //     enrollments: null //replace null with enrollment data!
-  // }
-
-  const courseNoList = [];
-  for (const enroll of DB.enrollments) {
-    if (enroll.studentId === studentId) {
-      courseNoList.push(enroll.courseNo);
-    }
-  }
-  return NextResponse.json({
-    ok: true,
-    courseNoList,
+  //validate input
+  const parseResult = zEnrollmentGetParam.safeParse({
+    studentId,
+    courseNo,
   });
+  if (parseResult.success === false) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: parseResult.error.issues[0].message,
+      },
+      { status: 400 }
+    );
+  }
+
+  //check if user provide one of 'studentId' or 'courseNo'
+  //User must not provide both values, and must not provide nothing
+  if(studentId && courseNo || !studentId && !courseNo){
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Please provide either studentId or courseNo and not both!",
+      },
+      { status: 400 }
+    );
+  }
+
+  //get all courses enrolled by a student
+  if (studentId) {
+    const courseNoList = [];
+    for (const enroll of DB.enrollments) {
+      if (enroll.studentId === studentId) {
+        courseNoList.push(enroll.courseNo);
+      }
+    }
+
+    const courses = [];
+    for (const courseNo of courseNoList) {
+      const course = DB.courses.find((x) => x.courseNo === courseNo);
+      courses.push(course);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      courses,
+    });
+    //get all students enrolled by a course
+  } else if (courseNo) {
+    const studentIdList = [];
+    for (const enroll of DB.enrollments) {
+      //your code here
+      if(enroll.courseNo === courseNo){
+        studentIdList.push(enroll.studentId);
+      }
+    }
+
+    const students:Student[] = [];
+    //your code here
+    for(const studentId of studentIdList){
+      const found_student = DB.students.find((std) => std.studentId === studentId);
+      if(!found_student) return NextResponse.json({
+        ok: false,
+        message: 'Oops, something went wrong',
+      },{ status: 500 })
+
+      students.push(found_student);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      students,
+    });
+  }
 };
 
-export const POST = async (request: NextRequest) => {
-  const rawAuthHeader = headers().get("authorization");
-
-  if (!rawAuthHeader || !rawAuthHeader.startsWith("Bearer ")) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: "Authorization header is required",
-      },
-      { status: 401 }
-    );
-  }
-
-  const token = rawAuthHeader.split(" ")[1];
-
-  const secret = process.env.JWT_SECRET || "This is my special secret";
-  let studentId = null;
-
-  //preparing "role" variable for reading role information from token
-  let role = null;
-
-  try {
-    const payload = jwt.verify(token, secret);
-    studentId = (<Payload>payload).studentId;
-
-    //read role information from "payload" here (just one line code!)
-    //role = ...
-  } catch {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: "Invalid token",
-      },
-      { status: 401 }
-    );
-  }
-
-  //if role is "ADMIN", send the following response
-  // return NextResponse.json(
-  //   {
-  //     ok: true,
-  //     message: "Only Student can access this API route",
-  //   },
-  //   { status: 403 }
-  // );
-
-  //read body request
+export const POST = async (request:NextRequest) => {
   const body = await request.json();
-  const { courseNo } = body;
-  if (typeof courseNo !== "string" || courseNo.length !== 6) {
+  const parseResult = zEnrollmentPostBody.safeParse(body);
+  if (parseResult.success === false) {
     return NextResponse.json(
       {
         ok: false,
-        message: "courseNo must contain 6 characters",
+        message: parseResult.error.issues[0].message,
       },
       { status: 400 }
     );
   }
 
-  //check if courseNo exists
+  const { studentId, courseNo } = body;
+
+  const foundStudent = DB.students.find((x) => x.studentId === studentId);
   const foundCourse = DB.courses.find((x) => x.courseNo === courseNo);
-  if (!foundCourse) {
+  if (!foundStudent || !foundCourse) {
     return NextResponse.json(
       {
         ok: false,
-        message: "courseNo does not exist",
+        message: "Student Id or Course No is not existed",
       },
       { status: 400 }
     );
   }
 
-  //check if student enrolled that course already
   const foundEnroll = DB.enrollments.find(
     (x) => x.studentId === studentId && x.courseNo === courseNo
   );
@@ -138,14 +119,12 @@ export const POST = async (request: NextRequest) => {
     return NextResponse.json(
       {
         ok: false,
-        message: "You already enrolled that course",
+        message: "Student already enrolled that course",
       },
       { status: 400 }
     );
   }
 
-  //if code reach here. Everything is fine.
-  //Do the DB saving
   DB.enrollments.push({
     studentId,
     courseNo,
@@ -153,56 +132,48 @@ export const POST = async (request: NextRequest) => {
 
   return NextResponse.json({
     ok: true,
-    message: "You has enrolled a course successfully",
+    message: "Student has enrolled course",
   });
 };
 
-export const DELETE = async (request: NextRequest) => {
-  //check token
-  //verify token and get "studentId" and "role" information here
-  let studentId = null;
-  let role = null;
-
-  //if role is "ADMIN", send the following response
-  // return NextResponse.json(
-  //   {
-  //     ok: true,
-  //     message: "Only Student can access this API route",
-  //   },
-  //   { status: 403 }
-  // );
-
-  //get courseNo from body and validate it
+export const DELETE = async (request:NextRequest) => {
   const body = await request.json();
-  const { courseNo } = body;
-  if (typeof courseNo !== "string" || courseNo.length !== 6) {
+
+  //validate body request with zod schema
+  const parseResult = zEnrollmentDeleteBody.safeParse(body);
+  if (parseResult.success === false) {
     return NextResponse.json(
       {
         ok: false,
-        message: "courseNo must contain 6 characters",
+        message: parseResult.error.issues[0].message,
       },
       { status: 400 }
     );
   }
 
-  const foundIndex = DB.enrollments.findIndex(
+  const { studentId, courseNo } = body;
+
+  //check if studentId and courseNo exist on enrollment
+  const foundEnroll = DB.enrollments.find(
     (x) => x.studentId === studentId && x.courseNo === courseNo
   );
-  if (foundIndex === -1) {
+  if (!foundEnroll) {
     return NextResponse.json(
-      {
-        ok: false,
-        message:
-          "You cannot drop from this course. You have not enrolled it yet!",
-      },
-      { status: 404 }
-    );
+     {
+       ok: false,
+       message: "Enrollment does not exist",
+     },
+     { status: 404 }
+   );
   }
 
-  DB.enrollments.splice(foundIndex, 1);
+  //perform deletion by using splice or array filter
+  DB.enrollments.splice(DB.enrollments.indexOf(foundEnroll), 1);
 
+  //if code reach here it means deletion is complete
   return NextResponse.json({
     ok: true,
-    message: "You has dropped from this course. See you next semester.",
+    message: "Enrollment has been deleted",
   });
 };
+
